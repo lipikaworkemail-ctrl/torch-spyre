@@ -1218,7 +1218,7 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
         ): {
             "ops_dict": {
                 # exp(unsqueeze(x)) triggers internal compile in eager mode that
-                # fails with "Host dimension not found in dim_map" errors
+                # fails with host dimension lookup errors
                 "combined": lambda dim, x: torch.exp(torch.unsqueeze(x, dim)),
             },
             "param_sets": {
@@ -1619,6 +1619,52 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
                 #     True,
                 # ),
             }
+        },
+        ("test_split", "test_split_cpu"): {
+            "ops_dict": {
+                "split3": lambda dim, index, x: (
+                    torch.split(x, x.size()[dim] // 3, dim=dim)[index].clone(),
+                ),
+            },
+            "param_sets": {
+                "1d0s0": (0, 0, cached_randn((384,), dtype=torch.float16)),
+                "1d0s1": (0, 1, cached_randn((384,), dtype=torch.float16)),
+                "1d0s2": (0, 2, cached_randn((384,), dtype=torch.float16)),
+                "2d0s0": (0, 0, cached_randn((9, 384), dtype=torch.float16)),
+                "2d0s1": (0, 1, cached_randn((9, 384), dtype=torch.float16)),
+                "2d0s2": (0, 2, cached_randn((9, 384), dtype=torch.float16)),
+                "2d1s0": (1, 0, cached_randn((9, 384), dtype=torch.float16)),
+                "2d1s1": (1, 1, cached_randn((9, 384), dtype=torch.float16)),
+                "2d1s2": (1, 2, cached_randn((9, 384), dtype=torch.float16)),
+                "3d0s0": (0, 0, cached_randn((9, 15, 384), dtype=torch.float16)),
+                "3d0s1": (0, 1, cached_randn((9, 15, 384), dtype=torch.float16)),
+                "3d0s2": (0, 2, cached_randn((9, 15, 384), dtype=torch.float16)),
+                "3d1s0": (1, 0, cached_randn((9, 15, 384), dtype=torch.float16)),
+                "3d1s1": (1, 1, cached_randn((9, 15, 384), dtype=torch.float16)),
+                "3d1s2": (1, 2, cached_randn((9, 15, 384), dtype=torch.float16)),
+                "3d2s0": (2, 0, cached_randn((9, 15, 384), dtype=torch.float16)),
+                "3d2s1": (2, 1, cached_randn((9, 15, 384), dtype=torch.float16)),
+                "3d2s2": (2, 2, cached_randn((9, 15, 384), dtype=torch.float16)),
+            },
+        },
+        ("test_slice", "test_slice_cpu"): {
+            "ops_dict": {
+                "slice3": lambda dim, index, x: x.exp(),
+            },
+            "param_sets": {
+                # TODO: Add more tests by generalizing size-1 dim support. See #1548
+                "3d1s0": (1, 0, cached_randn((5, 3, 192), dtype=torch.float16)),
+                "3d1s1": (1, 1, cached_randn((5, 3, 192), dtype=torch.float16)),
+                "3d1s2": (1, 2, cached_randn((5, 3, 192), dtype=torch.float16)),
+            },
+        },
+        ("test_rope_fms", "test_rope_cpu"): {
+            "param_sets": {
+                "fp16": (
+                    cached_randn((2, 256, 4096), dtype=torch.float16),
+                    cached_randn((1, 256, 2, 2, 64), dtype=torch.float16),
+                ),
+            },
         },
     }
 
@@ -2189,6 +2235,35 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
                 return result.item()
 
             compare_with_cpu(fn, x, y, cpu_compile=False)
+
+    def test_split_cpu(self, op, dim, index, x):
+        def fn(x):
+            return op(dim, index, x)
+
+        compare_with_cpu(fn, x, run_eager=False)
+
+    def test_slice_cpu(self, op, dim, index, x):
+        def fn(x):
+            start = index * (x.size()[0] // 3)
+            end = (index + 1) * (x.size()[0] // 3)
+            if dim == 0:
+                return op(dim, index, x[start:end])
+            elif dim == 1:
+                return op(dim, index, x[:, start:end])
+            elif dim == 2:
+                return op(dim, index, x[:, :, start:end])
+
+        compare_with_cpu(fn, x, run_eager=False, cpu_compile=False)
+
+    def test_rope_cpu(self, q, freqs):
+        def fn(q, freqs):
+            q_ = q.view(2, 256, 32, 128).view(2, 256, 32, 2, 64)
+            mul_out = freqs[:, :, None, :, :, :] * q_.unsqueeze(-3)
+            sum_out = mul_out.sum(4, keepdim=True)
+            q_out = sum_out.flatten(3)
+            return q_out
+
+        compare_with_cpu(fn, q, freqs, cpu_compile=False)
 
 
 if __name__ == "__main__":

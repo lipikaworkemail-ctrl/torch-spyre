@@ -257,7 +257,6 @@ def _create_sdsc_tensors(
     use_op_dims = not _is_matmul(op_spec.op)
 
     missing_dim = None
-    backGap: dict[Symbol, int] = {}
     overwrite_infos: dict = (
         dict(op_spec.op_info.get("overwrite_infos", {})) if op_spec.op_info else {}
     )
@@ -284,19 +283,25 @@ def _create_sdsc_tensors(
         scales: dict = {}
         strides: dict = {}
         offsets: dict = {}
+        backGap: dict[Symbol, int] = {}
         max_dim_sizes: dict = {}
         reduced_dims: list = []
         use_adjusted_size = op_spec.op == "overwrite" and not arg.is_input
         if use_op_dims and dim_order != dims:
             reduced_dims = [d for d in op_dim_order if d not in dim_order]
             dim_order = dim_order + reduced_dims
+
         if op_stick_dim is None:
             # No stick dim found in op - add one
             stick_dim = next(d for d in dims if d not in op_dim_order)
             dim_order = dim_order + [stick_dim]
         if op_spec.op == "layernormscale" and len(sdsc_args) == 0:
             reduced_dims = [stick_dim]
-        for dim_idx, dim in enumerate(dim_order):
+        stride_dim_order = [
+            d for d in dim_order if d not in reduced_dims
+        ] + reduced_dims
+        for dim in dim_order:
+            stride_idx = stride_dim_order.index(dim)
             if dim in reduced_dims and op_spec.op != "layernormscale":
                 scales[dim] = -2 if (stick_dim is None and dim is op_stick_dim) else -1
             elif dim in reduced_dims and op_spec.op == "layernormscale":
@@ -304,11 +309,11 @@ def _create_sdsc_tensors(
             else:
                 scales[dim] = 1
             strides[dim] = _calculate_device_stride(
-                dim_idx,
+                stride_idx,
                 arg.device_size if not use_adjusted_size else adjusted_output_size,
             )
             offsets[dim] = 0
-            dim_device_stride = math.prod(arg.device_size[-dim_idx - 1 :])
+            dim_device_stride = math.prod(arg.device_size[-stride_idx - 1 :])
             for key in list(overwrite_infos.keys()):
                 info = overwrite_infos[key]
                 if info["device_stride"] == dim_device_stride and not arg.is_input:
@@ -317,6 +322,22 @@ def _create_sdsc_tensors(
                     overwrite_infos.pop(key)
                     use_adjusted_size = False
                     break
+
+            dev_dim_size = arg.device_size[-stride_idx - 2]
+            it_dim_size = iteration_space[dim]
+            if dim == stick_dim:
+                stick_size = arg.device_dtype.elems_per_stick()
+                dev_dim_size *= stick_size
+                it_dim_size = ((it_dim_size - 1) // stick_size + 1) * stick_size
+
+            if dev_dim_size > it_dim_size and "overwrite_infos" not in op_spec.op_info:
+                # TODO: overwrite and view offsets cannot be used together until the
+                # overwrite operator is refactored to use coordinate expression offsets
+                dim_coord = arg.device_coordinates[-stride_idx - 2]
+                dim_offset = int(dim_coord.as_coeff_Add()[0])
+                offsets[dim] = dim_offset * dim_device_stride
+                backGap[dim] = dev_dim_size - it_dim_size
+                strides[dim] = strides[dim] / dev_dim_size * it_dim_size
 
             max_dim_sizes[dim] = -1
 
@@ -338,7 +359,7 @@ def _create_sdsc_tensors(
                 max_dim_sizes=max_dim_sizes,
                 allocation=arg.allocation,
                 start_address=addr,
-                backGap=backGap if not arg.is_input else {},
+                backGap=backGap,
             )
         )
 
