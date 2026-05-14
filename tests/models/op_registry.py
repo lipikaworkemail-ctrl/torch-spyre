@@ -109,8 +109,30 @@ def _tensor_long(x: torch.Tensor) -> torch.Tensor:
 
 
 def _tensor_to(x: torch.Tensor, *args, **kwargs) -> torch.Tensor:
-    # allow YAML to pass (dtype/device/etc.) via args/kwargs
-    return x.to(*args, **kwargs)
+    """
+    Handle tensor.to() with flexible argument types.
+    
+    PyTorch's tensor.to() accepts:
+    - to(dtype)
+    - to(device)
+    - to(device, dtype)
+    - to(dtype=..., device=...)
+    
+    YAML may pass torch.dtype objects as positional args, which need special handling.
+    """
+    # Convert args to proper types
+    converted_args = []
+    for arg in args:
+        if isinstance(arg, torch.dtype):
+            # If a dtype is passed as positional arg, use it as dtype kwarg
+            kwargs['dtype'] = arg
+        elif isinstance(arg, (str, torch.device)):
+            # Device can be positional
+            converted_args.append(arg)
+        else:
+            converted_args.append(arg)
+    
+    return x.to(*converted_args, **kwargs)
 
 
 def _tensor_repeat(x: torch.Tensor, rep, *args) -> torch.Tensor:
