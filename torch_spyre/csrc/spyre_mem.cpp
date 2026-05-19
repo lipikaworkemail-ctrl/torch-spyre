@@ -435,7 +435,7 @@ at::Tensor spyre_empty(c10::IntArrayRef size,
   c10::Device device = device_opt.value_or(
       c10::impl::VirtualGuardImpl{c10::DeviceType::PrivateUse1}.getDevice());
   DEBUGINFO("shape=", size, " on Spyre ", device);
-  const auto dtype = c10::dtype_or_default(dtype_opt);
+  auto dtype = c10::dtype_or_default(dtype_opt);
   TORCH_CHECK(device.is_privateuseone());
   TORCH_CHECK(c10::layout_or_default(layout_opt) == c10::Layout::Strided,
               "Non strided layout not supported");
@@ -445,7 +445,10 @@ at::Tensor spyre_empty(c10::IntArrayRef size,
               "Spyre backend does not support dtype ", dtype);
   const c10::DeviceGuard device_guard(device);
 
-  auto device_layout = SpyreTensorLayout(size.vec(), dtype);
+  // Get the actual device scalar type (handles conversions like int64->int32)
+  auto device_dtype = getDeviceScalarType(dtype);
+
+  auto device_layout = SpyreTensorLayout(size.vec(), device_dtype);
   size_t size_bytes = get_device_size_in_bytes(device_layout);
   constexpr c10::DispatchKeySet pu1_dks(c10::DispatchKey::PrivateUse1);
   auto tensor = at::detail::make_tensor_base<SpyreTensorImpl>(
@@ -453,7 +456,7 @@ at::Tensor spyre_empty(c10::IntArrayRef size,
           c10::StorageImpl::use_byte_size_t(), size_bytes,
           &SpyreAllocator::instance(),
           /*resizeable=*/true)),
-      pu1_dks, c10::scalarTypeToTypeMeta(dtype));
+      pu1_dks, c10::scalarTypeToTypeMeta(device_dtype));
 
   auto spyre_tensor_impl =
       static_cast<SpyreTensorImpl*>(tensor.unsafeGetTensorImpl());
@@ -480,10 +483,14 @@ at::Tensor spyre_empty_strided(c10::IntArrayRef size, c10::IntArrayRef stride,
                                std::optional<bool> pin_memory_opt) {
   // SETUP FOR Spyre TENSOR
   at::detail::check_size_nonnegative(size);
-  const auto scalar_type = c10::dtype_or_default(dtype_opt);
+  auto scalar_type = c10::dtype_or_default(dtype_opt);
   TORCH_CHECK(spyre::is_supported_dtype(scalar_type),
               "Spyre backend does not support dtype ", scalar_type);
-  caffe2::TypeMeta dtype = c10::scalarTypeToTypeMeta(scalar_type);
+
+  // Get the actual device scalar type (handles conversions like int64->int32)
+  auto device_scalar_type = getDeviceScalarType(scalar_type);
+
+  caffe2::TypeMeta dtype = c10::scalarTypeToTypeMeta(device_scalar_type);
   c10::Device device = device_opt.value_or(
       c10::impl::VirtualGuardImpl{c10::DeviceType::PrivateUse1}.getDevice());
   DEBUGINFO("Tensor info on CPU (Size:", size, ", Stride: ", stride,
@@ -523,6 +530,10 @@ at::Tensor spyre_empty_with_layout(c10::IntArrayRef size,
   at::detail::check_size_nonnegative(size);
   c10::Device device =
       c10::impl::VirtualGuardImpl{c10::DeviceType::PrivateUse1}.getDevice();
+
+  // Get the actual device scalar type (handles conversions like int64->int32)
+  auto device_dtype = getDeviceScalarType(dtype);
+
   size_t size_bytes = get_device_size_in_bytes(device_layout);
   auto spyre_storage_impl = c10::make_intrusive<SpyreStorageImpl>(
       c10::StorageImpl::use_byte_size_t(), size_bytes,
@@ -534,7 +545,8 @@ at::Tensor spyre_empty_with_layout(c10::IntArrayRef size,
   const c10::DeviceGuard device_guard(device);
   constexpr c10::DispatchKeySet pu1_dks(c10::DispatchKey::PrivateUse1);
   auto tensor = at::detail::make_tensor_base<SpyreTensorImpl>(
-      std::move(spyre_storage), pu1_dks, c10::scalarTypeToTypeMeta(dtype));
+      std::move(spyre_storage), pu1_dks,
+      c10::scalarTypeToTypeMeta(device_dtype));
 
   auto spyre_tensor_impl =
       static_cast<SpyreTensorImpl*>(tensor.unsafeGetTensorImpl());
@@ -627,7 +639,7 @@ at::Tensor empty_with_layout(
   c10::Device device = device_opt.value_or(
       c10::impl::VirtualGuardImpl{c10::DeviceType::PrivateUse1}.getDevice());
   DEBUGINFO("shape=", size, " on Spyre ", device);
-  const auto dtype = c10::dtype_or_default(dtype_opt);
+  auto dtype = c10::dtype_or_default(dtype_opt);
   TORCH_CHECK(device.is_privateuseone());
   TORCH_CHECK(c10::layout_or_default(layout_opt) == c10::Layout::Strided,
               "Non strided layout not supported");
@@ -637,6 +649,9 @@ at::Tensor empty_with_layout(
               "Spyre backend does not support dtype ", dtype);
   const c10::DeviceGuard device_guard(device);
 
+  // Get the actual device scalar type (handles conversions like int64->int32)
+  auto device_dtype = getDeviceScalarType(dtype);
+
   size_t size_bytes = get_device_size_in_bytes(device_layout);
   constexpr c10::DispatchKeySet pu1_dks(c10::DispatchKey::PrivateUse1);
   auto tensor = at::detail::make_tensor_base<SpyreTensorImpl>(
@@ -644,7 +659,7 @@ at::Tensor empty_with_layout(
           c10::StorageImpl::use_byte_size_t(), size_bytes,
           &SpyreAllocator::instance(),
           /*resizeable=*/true)),
-      pu1_dks, c10::scalarTypeToTypeMeta(dtype));
+      pu1_dks, c10::scalarTypeToTypeMeta(device_dtype));
 
   auto spyre_tensor_impl =
       static_cast<SpyreTensorImpl*>(tensor.unsafeGetTensorImpl());

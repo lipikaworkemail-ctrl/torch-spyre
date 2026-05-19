@@ -347,6 +347,24 @@ stringToSenDatatypePair(const std::string& type_name) {
   return {sendnn::sen_datatype_enum::dt_undef,
           sendnn::sen_datatype_enum::dt_undef};
 }
+inline c10::ScalarType getDeviceScalarType(const c10::ScalarType& cpu_dtype) {
+  /* Returns the actual scalar type to use on Spyre device.
+   * For types that need conversion (e.g., int64 -> int32), returns the device
+   * type. For types that don't need conversion, returns the same type.
+   */
+  static const std::unordered_map<c10::ScalarType, c10::ScalarType>
+      dtype_conversion_map = {
+          {c10::kLong, c10::kInt},  // int64 -> int32 on Spyre
+          // Add more conversions here if needed in the future
+      };
+
+  auto it = dtype_conversion_map.find(cpu_dtype);
+  if (it != dtype_conversion_map.end()) {
+    return it->second;  // Return converted type
+  }
+  return cpu_dtype;  // No conversion needed, return same type
+}
+
 inline std::pair<size_t, size_t> elementSize(const c10::ScalarType& dtype) {
   /* return size (bytes) on CPU and on Spyre*/
   static const std::unordered_map<c10::ScalarType, std::pair<size_t, size_t>>
@@ -357,6 +375,15 @@ inline std::pair<size_t, size_t> elementSize(const c10::ScalarType& dtype) {
   if (it != itemsize_map.end()) {
     return it->second;
   }
+
+  // For types that undergo conversion, compute sizes dynamically
+  auto device_dtype = getDeviceScalarType(dtype);
+  if (device_dtype != dtype) {
+    // Type conversion occurs: return CPU size and device size
+    return {c10::elementSize(dtype), c10::elementSize(device_dtype)};
+  }
+
+  // No conversion: same size on both CPU and device
   auto val = c10::elementSize(dtype);
   return {val, val};
 }
