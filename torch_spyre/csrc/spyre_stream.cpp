@@ -33,6 +33,7 @@
 #include "spyre_guard.h"
 #include "spyre_mem.h"
 #include "spyre_tensor_impl.h"
+#include "types_mapping.h"
 
 namespace spyre {
 namespace {
@@ -144,10 +145,23 @@ void SpyreStream::copyAsync(const at::Tensor& src,
   DEBUGINFO("dst (", dst.scalar_type(), ") on:", dst.device());
 
   // TODO(tmhoangt): add type conversion node
-  // Type checking - no type conversion support yet
+  // Type checking - allow conversions where CPU type maps to different Spyre type
+  bool is_valid_conversion = false;
+  if (src.scalar_type() != dst.scalar_type()) {
+    // Check if this is a valid CPU<->Spyre type conversion
+    auto src_device_type = getDeviceScalarType(src.scalar_type());
+    auto dst_device_type = getDeviceScalarType(dst.scalar_type());
+    
+    // Valid if: src's device type == dst OR dst's device type == src
+    // This handles both CPU->Spyre and Spyre->CPU conversions
+    is_valid_conversion = (src_device_type == dst.scalar_type()) ||
+                         (dst_device_type == src.scalar_type());
+  }
+  
   TORCH_CHECK(
-      src.scalar_type() == dst.scalar_type(),
-      "Spyre backend does not support type conversion yet during copy.");
+      src.scalar_type() == dst.scalar_type() || is_valid_conversion,
+      "Spyre backend does not support type conversion during copy for types: ",
+      src.scalar_type(), " -> ", dst.scalar_type());
 
   // Determine copy direction
   bool host2device = src.is_cpu() && dst.is_privateuseone();
