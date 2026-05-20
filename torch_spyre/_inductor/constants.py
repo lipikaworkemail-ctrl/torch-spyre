@@ -54,6 +54,8 @@ SPYRE_FP32_OPS = [
     "floor",
     "maximum",
     "minimum",
+    "rsqrt",
+    "mean"
 ]
 
 TOPK_OPS = {"topkvalue", "topkindex"}
