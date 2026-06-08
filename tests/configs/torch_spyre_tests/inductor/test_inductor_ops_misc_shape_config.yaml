@@ -39,6 +39,7 @@ test_suite_config:
             # shape ops
             - TestOps::test_flatten.*
             - TestOps::test_permute.*
+            - TestOps::test_unbind.*
             - TestOps::test_size_one.*
             # squeeze covers test_squeeze and test_squeeze_reduction
             - TestOps::test_squeeze.*
@@ -54,6 +55,8 @@ test_suite_config:
             - TestOps::test_to_dtype.*
             - TestOps::test_round_trip_to_dtype.*
             - TestOps::test_repeat.*
+            - TestOps::test_restickify_fp32_unsupported_xfail
+            - TestOps::test_restickify_int64_unsupported_xfail
           mode: mandatory_success
           tags:
             - ops__inductor_misc_shape
