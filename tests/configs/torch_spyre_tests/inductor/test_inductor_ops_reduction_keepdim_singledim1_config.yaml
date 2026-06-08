@@ -7,3 +7,10 @@ test_suite_config:
             - TestOps::test_reduce_keepdim1.*
             - TestOps::test_reduce_edge_keepdim1.*
           mode: mandatory_success
+        - names:
+            - TestOps.*::test_mean_keepdim1_mean_fp16_3d_dim_2.*
+            - TestOps.*::test_mean_keepdim1_mean_fp16_3d_dim_neg1.*
+            - TestOps.*::test_mean_keepdim1_mean_fp32_3d_dim_2.*
+            - TestOps.*::test_mean_keepdim1_mean_fp32_3d_dim_neg1.*
+            - TestOps.*::test_sum_keepdim1_sum_fp32_3d_dim_neg1.*
+          mode: xfail

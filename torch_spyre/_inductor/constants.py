@@ -56,7 +56,6 @@ SPYRE_FP32_OPS = [
     "realdiv",
     "relufwd",
     "reciprocal",
-    "rsqrt",
     "mean",
     "sum",
     "max",
