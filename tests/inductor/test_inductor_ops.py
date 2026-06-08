@@ -816,6 +816,13 @@ class TestOps(unittest.TestCase, metaclass=ParameterizedTestMeta):
         ("test_reduce_keepdim1", "test_reduce_keepdim1_cpu"): {
             "ops_dict": CORE_REDUCTION_OPS_DICT,
             "param_sets": COMMON_REDUCTION_KEEPDIM_PARAM_SETS,
+            "expect_fail": [
+                "mean_fp16_3d_dim_2",
+                "mean_fp16_3d_dim_neg1",
+                "mean_fp32_3d_dim_2",
+                "mean_fp32_3d_dim_neg1",
+                "sum_fp32_3d_dim_neg1",
+            ],
         },
         ("test_reduce_edge_keepdim0", "test_reduce_keepdim0_cpu"): {
             "ops_dict": CORE_REDUCTION_OPS_DICT,

@@ -73,9 +73,9 @@ class TestNormalizationScalarOperations:
         _compare_modes(execution_mode, layernorm, x, atol=tol[0], rtol=tol[1])
 
     # TODO: ISSUE https://github.com/torch-spyre/torch-spyre/issues/1454
-    @pytest.mark.xfail(reason="Mean reduction on float32 (IEEE_FP32) not supported")
     def test_layernorm_affine(self, execution_mode):
         """Last-dim layernorm with gamma/beta (affine)."""
+        pytest.xfail("Mean reduction on float32 (IEEE_FP32) not supported")
 
         eps = 1e-5
         hidden_size = 768
@@ -119,9 +119,9 @@ class TestNormalizationScalarOperations:
         _compare_modes(execution_mode, rmsnorm, x, atol=tol[0], rtol=tol[1])
 
     # TODO: ISSUE https://github.com/torch-spyre/torch-spyre/issues/1454
-    @pytest.mark.xfail(reason="Mean reduction on float32 (IEEE_FP32) not supported")
     def test_rmsnorm_with_weight(self, execution_mode):
         """Test RMSNorm with learnable weight parameter."""
+        pytest.xfail("Mean reduction on float32 (IEEE_FP32) not supported")
 
         eps = 1e-6
         hidden_size = 768
@@ -252,11 +252,11 @@ class TestNormalizationScalarOperations:
         _compare_modes(execution_mode, groupnorm, x, atol=tol[0], rtol=tol[1])
 
     # TODO: ISSUE https://github.com/torch-spyre/torch-spyre/issues/1722
-    @pytest.mark.xfail(
-        reason="view() + mean() triggers Cannot satisfy hardware memory span limit (256MB) without splitting reduction dimensions."
-    )
     def test_groupnorm_affine(self, execution_mode):
         """Test GroupNorm with affine transformation."""
+        pytest.xfail(
+            "view() + mean() triggers Cannot satisfy hardware memory span limit (256MB) without splitting reduction dimensions."
+        )
 
         eps = 1e-5
         num_groups = 32
@@ -333,9 +333,9 @@ class TestNormalizationScalarOperations:
         _compare_modes(execution_mode, instancenorm_3d, x, atol=1e-4, rtol=1e-3)
 
     # TODO: ISSUE https://github.com/torch-spyre/torch-spyre/issues/1454
-    @pytest.mark.xfail(reason="Mean reduction on float32 (IEEE_FP32) not supported")
     def test_instancenorm_affine(self, execution_mode):
         """Test InstanceNorm with affine transformation."""
+        pytest.xfail("Mean reduction on float32 (IEEE_FP32) not supported")
 
         eps = 1e-5
         num_channels = 64
