@@ -31,7 +31,13 @@ from torch._inductor.utils import IndentedBuffer
 from torch_spyre._C import DataFormats
 from torch_spyre._inductor.codegen.compute_ops import generate_sdsc
 from torch_spyre._inductor.codegen.superdsc import SDSCSpec, parse_op_spec
-from torch_spyre._inductor.op_spec import DebugHandle, OpSpec, SourceLoc, TensorArg
+from torch_spyre._inductor.op_spec import (
+    DebugHandle,
+    OpSpec,
+    ProvenanceTransform,
+    SourceLoc,
+    TensorArg,
+)
 from torch_spyre._inductor.provenance import _stable_id, build_debug_handle
 from torch_spyre._inductor.spyre_kernel import _codegen_op_spec_list
 
@@ -94,12 +100,12 @@ class TestStableId:
         a = _stable_id(s, "aten.mm.default", ("n0", "op0"))
         b = _stable_id(s, "aten.mm.default", ("n0", "op0"))
         assert a == b
-        assert a >= 0
+        assert 0 <= a < 2**63
 
     @pytest.mark.parametrize(
         "a, b",
         [
-            # each component must affect the hash: aten_op, source line, ir_chain
+            # Each headline component affects the hash.
             (
                 (SourceLoc("m.py", 1), "aten.mm.default", ("n0",)),
                 (SourceLoc("m.py", 1), "aten.add.Tensor", ("n0",)),
@@ -117,6 +123,51 @@ class TestStableId:
     def test_distinguishes_content(self, a, b):
         assert _stable_id(*a) != _stable_id(*b)
 
+    def test_distinguishes_complete_source_ranges(self):
+        first = SourceLoc("m.py", 1, 2, 3, 4)
+        changed_end = SourceLoc("m.py", 1, 2, 3, 5)
+
+        assert _stable_id(first, "aten.mm.default", ("n0",)) != _stable_id(
+            changed_end, "aten.mm.default", ("n0",)
+        )
+
+    def test_distinguishes_fused_membership_and_order(self):
+        first = DebugHandle(
+            id=11,
+            source=SourceLoc("m.py", 10),
+            aten_op="aten.add.Tensor",
+            ir_chain=("add",),
+        )
+        second = DebugHandle(
+            id=12,
+            source=SourceLoc("m.py", 20),
+            aten_op="aten.relu.default",
+            ir_chain=("relu",),
+        )
+        source = SourceLoc("m.py", 1)
+
+        first_only = _stable_id(source, None, ("add", "relu", "op0"), (first,))
+        second_only = _stable_id(source, None, ("add", "relu", "op0"), (second,))
+        forward = _stable_id(source, None, ("add", "relu", "op0"), (first, second))
+        reverse = _stable_id(source, None, ("add", "relu", "op0"), (second, first))
+
+        assert first_only != second_only
+        assert forward != reverse
+
+
+class TestProvenanceTransform:
+    def test_is_structured_frozen_value(self):
+        transform = ProvenanceTransform("fusion", "fuse_ops", "same tile")
+        assert transform.to_dict() == {
+            "kind": "fusion",
+            "pass_name": "fuse_ops",
+            "reason": "same tile",
+        }
+        assert (
+            len({transform, ProvenanceTransform("fusion", "fuse_ops", "same tile")})
+            == 1
+        )
+
 
 class TestDebugHandle:
     def test_to_dict_is_structured_and_nested(self):
@@ -132,8 +183,17 @@ class TestDebugHandle:
             aten_op="aten.mm.default",
             ir_chain=("mm_default_1", "op0"),
             fused_from=(child,),
+            transform_history=(ProvenanceTransform("fusion", "fuse_ops", "same tile"),),
         )
         d = h.to_dict()
+        assert set(d) == {
+            "id",
+            "source",
+            "aten_op",
+            "ir_chain",
+            "fused_from",
+            "transform_history",
+        }
         assert d["source"] == {
             "file": "m.py",
             "start_line": 5,
@@ -144,7 +204,13 @@ class TestDebugHandle:
         assert d["aten_op"] == "aten.mm.default"
         assert d["ir_chain"] == ["mm_default_1", "op0"]
         assert d["fused_from"][0]["aten_op"] == "aten.permute.default"
-        assert d["fusion_context"] is None
+        assert d["transform_history"] == [
+            {
+                "kind": "fusion",
+                "pass_name": "fuse_ops",
+                "reason": "same tile",
+            }
+        ]
 
     def test_to_dict_serializes_id_as_string_for_js_safety(self):
         # A 63-bit id exceeds JS Number.MAX_SAFE_INTEGER (2**53-1); a JSON number
@@ -192,6 +258,20 @@ class TestBuildDebugHandle:
     def test_empty_origins_returns_none(self):
         assert build_debug_handle(_buffer([])) is None
 
+    def test_level_zero_does_not_gate_handle_construction(self):
+        from torch._inductor import config as inductor_config
+
+        relu = _node(
+            "relu",
+            "/home/u/model.py",
+            42,
+            "aten.relu.default",
+        )
+        with inductor_config.patch("trace.provenance_tracking_level", 0):
+            handle = build_debug_handle(_buffer([relu], origin_node=relu, name="op2"))
+        assert handle is not None
+        assert handle.aten_op == "aten.relu.default"
+
     def test_single_op_with_origin_node(self):
         # Inductor's clean 1:1 case (e.g. pointwise relu): use origin_node.
         relu = _node("relu", "/home/u/model.py", 42, "aten.relu.default")
@@ -235,6 +315,35 @@ class TestBuildDebugHandle:
         assert h.source is None  # distinct sources
         assert h.aten_op is None  # distinct atens
 
+    def test_fused_constituents_participate_in_parent_id(self):
+        first = build_debug_handle(
+            _buffer(
+                [
+                    _node("add", "/m.py", 10, "aten.add.Tensor"),
+                    _node("relu", "/m.py", 20, "aten.relu.default"),
+                ],
+                name="op1",
+            )
+        )
+        changed = build_debug_handle(
+            _buffer(
+                [
+                    _node("add", "/m.py", 11, "aten.add.Tensor"),
+                    _node("relu", "/m.py", 21, "aten.relu.default"),
+                ],
+                name="op1",
+            )
+        )
+
+        assert first is not None and changed is not None
+        assert first.source is None and changed.source is None
+        assert first.aten_op is None and changed.aten_op is None
+        assert first.ir_chain == changed.ir_chain
+        assert tuple(child.id for child in first.fused_from) != tuple(
+            child.id for child in changed.fused_from
+        )
+        assert first.id != changed.id
+
     def test_skips_torch_internal_frame(self):
         n = _node("x", aten="aten.linear.default")
         n.meta["stack_trace"] = (
@@ -256,6 +365,38 @@ class TestBuildDebugHandle:
         h2 = build_debug_handle(_buffer([n_mul, n_add], name="op0"))
         assert h1.ir_chain == h2.ir_chain
         assert h1.id == h2.id
+
+    def test_reads_structured_transform_history(self):
+        # Explicit provenance helpers stamp immutable records on a buffer;
+        # build_debug_handle carries the complete history.
+        from torch_spyre._inductor.provenance import _SPYRE_PROV_HISTORY_ATTR
+
+        n = _node("mm", "/m.py", 5, "aten.mm.default")
+        buf = _buffer([n])
+        history = (
+            ProvenanceTransform("decomposition", "split_multi_ops"),
+            ProvenanceTransform("fusion", "spyre_fuse_nodes", "same tile"),
+        )
+        setattr(buf, _SPYRE_PROV_HISTORY_ATTR, history)
+        handle = build_debug_handle(buf)
+        assert handle is not None
+        assert handle.transform_history == history
+        without_history = build_debug_handle(_buffer([n]))
+        assert without_history is not None
+        assert handle.id == without_history.id
+
+    def test_single_origin_no_trace_is_honest_empty(self):
+        # A single compiler-generated origin with no stack_trace and no
+        # origin_node (e.g. a synthesized node with no user source line): the
+        # source is honestly None rather than guessed, but original_aten still
+        # yields aten_op, and ir_chain remains valid. Not a fusion (one origin),
+        # so fused_from stays empty.
+        n = _node("synthetic", aten="aten.clone.default")
+        h = build_debug_handle(_buffer([n], name="op3"))
+        assert h.source is None
+        assert h.aten_op == "aten.clone.default"
+        assert h.ir_chain == ("synthetic", "op3")
+        assert h.fused_from == ()
 
 
 class TestOpSpecDebugHandle:
@@ -330,6 +471,7 @@ class TestSDSCSpecDebugHandle:
             layouts={},
             args=[],
             constants={},
+            conv_params={},
             coordinate_masking={},
             **kw,
         )
@@ -397,6 +539,7 @@ class TestCodegenRoundTrip:
         "TensorArg": TensorArg,
         "DebugHandle": DebugHandle,
         "SourceLoc": SourceLoc,
+        "ProvenanceTransform": ProvenanceTransform,
         "DataFormats": DataFormats,
         "sympify": sympify,
     }
@@ -423,6 +566,24 @@ class TestCodegenRoundTrip:
         )
         result = self._roundtrip(_threadable_op_spec(debug_handle=h))
         assert result.debug_handle == h
+
+    def test_transform_history_survives_codegen_roundtrip(self):
+        h = DebugHandle(
+            id=7,
+            source=SourceLoc("model.py", 5),
+            aten_op="aten.add.Tensor",
+            ir_chain=("add", "op0"),
+            transform_history=(
+                ProvenanceTransform(
+                    kind="decomposition",
+                    pass_name="split_multi_ops",
+                    reason="materialize add",
+                ),
+            ),
+        )
+        result = self._roundtrip(_threadable_op_spec(debug_handle=h))
+        assert result.debug_handle == h
+        assert result.debug_handle.transform_history == h.transform_history
 
     def test_fused_handle_with_children_survives_roundtrip(self):
         # The n->1 fusion case: nested fused_from must survive too.
